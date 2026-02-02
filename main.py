@@ -11,8 +11,9 @@ app = FastAPI()
 
 # Load Whisper once 
 model = whisper.load_model("base")
+#API_SECRET = "my_secret_key"
 
-API_SECRET = "my_secret_key"
+API_SECRET = os.getenv("API_SECRET")
 
 # Request Schema
 class VoiceRequest(BaseModel):

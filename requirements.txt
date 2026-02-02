@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+openai-whisper
+torch
+librosa
+numpy
+python-multipart
+ffmpeg-python

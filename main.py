@@ -1,5 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException
-from fastapi import Request
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import base64
 import whisper
@@ -10,7 +9,7 @@ import os
 
 app = FastAPI()
 
-# Load Whisper once 
+# ------------------ MODEL LOADER ------------------
 model = None
 
 def get_model():
@@ -19,12 +18,10 @@ def get_model():
         model = whisper.load_model("tiny", device="cpu")
     return model
 
-#model = whisper.load_model("base")
-#API_SECRET = "my_secret_key"
-
+# ------------------ CONFIG ------------------
 API_SECRET = os.getenv("API_SECRET")
 
-# Request Schema
+# ------------------ SCHEMA ------------------
 class VoiceRequest(BaseModel):
     language: str
     audioFormat: str
@@ -32,112 +29,113 @@ class VoiceRequest(BaseModel):
 
 SUPPORTED_LANGUAGES = ["Tamil", "English", "Hindi", "Malayalam", "Telugu"]
 
+# ------------------ ENDPOINT ------------------
 @app.post("/api/voice-detection")
-async def detect_voice(request: Request, body: VoiceRequest):
+async def detect_voice(req: Request, body: VoiceRequest):
 
-    #api_key = request.headers.get("x-api-key")
-    api_key = request.headers.get("x-api-key") or request.headers.get("x_api_key")
-    print("VERSION 3 DEPLOYED")
-    print("HEADERS RECEIVED:", dict(request.headers))
+    api_key = req.headers.get("x-api-key") or req.headers.get("x_api_key")
+    print("VERSION 4 DEPLOYED")
+    print("HEADERS:", dict(req.headers))
+
+    # -------- API KEY --------
+    if not API_SECRET:
+        return {"status": "error", "message": "Server misconfiguration: API secret missing"}
 
     if api_key != API_SECRET:
         return {"status": "error", "message": "Invalid API key"}
 
-    if request.language not in SUPPORTED_LANGUAGES:
+    # -------- INPUT VALIDATION --------
+    if body.language not in SUPPORTED_LANGUAGES:
         return {"status": "error", "message": "Unsupported language"}
 
-    if request.audioFormat.lower() != "mp3":
+    if body.audioFormat.lower() != "mp3":
         return {"status": "error", "message": "Invalid audio format"}
 
+    # -------- AUDIO PROCESSING --------
     try:
-        # Decode Base64
-        audio_bytes = base64.b64decode(request.audioBase64)
+        audio_bytes = base64.b64decode(body.audioBase64)
+    except Exception:
+        return {"status": "error", "message": "Invalid base64 audio"}
 
+    try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
             f.write(audio_bytes)
             temp_path = f.name
+    except Exception:
+        return {"status": "error", "message": "Failed saving audio"}
 
-        # Transcription
-        #result = model.transcribe(temp_path)
+    try:
         result = get_model().transcribe(temp_path)
-
         transcript = result["text"]
-
-        # Audio Features
-        #y, sr = librosa.load(temp_path)
-        y, sr = librosa.load(temp_path, sr=16000)
-
-        mfcc_mean = float(np.mean(librosa.feature.mfcc(y=y, sr=sr)))
-        pitch_mean = float(np.mean(librosa.yin(y, fmin=50, fmax=300)))
-
+    except Exception:
         os.remove(temp_path)
-        # Additional forensic features
-        pitch_variance = float(np.var(librosa.yin(y, fmin=50, fmax=300)))
-        zcr_mean = float(np.mean(librosa.feature.zero_crossing_rate(y)))
-        spectral_flatness = float(np.mean(librosa.feature.spectral_flatness(y=y)))
-        # -------- Advanced Detection Logic --------
-        audio_score = 0
-        text_score = 0
+        return {"status": "error", "message": "Speech transcription failed"}
 
+    try:
+        y, sr = librosa.load(temp_path, sr=16000)
+    except Exception:
+        os.remove(temp_path)
+        return {"status": "error", "message": "Audio decoding failed"}
 
-        # Pitch variance (AI voices often too consistent)
-        if pitch_variance < 50:
-            audio_score += 0.3
-        else:
-            text_score += 0.1
+    os.remove(temp_path)
 
-        # Zero-crossing rate (synthetic audio cleaner)
-        if zcr_mean < 0.05:
-            audio_score += 0.3
-        else:
-            text_score += 0.1
+    # -------- FEATURE EXTRACTION --------
+    pitch = librosa.yin(y, fmin=50, fmax=300)
+    pitch_variance = float(np.var(pitch))
+    zcr_mean = float(np.mean(librosa.feature.zero_crossing_rate(y)))
+    spectral_flatness = float(np.mean(librosa.feature.spectral_flatness(y=y)))
 
-        # Spectral flatness (AI lacks natural noise)
-        if spectral_flatness < 0.01:
-            audio_score += 0.3
-        else:
-            text_score += 0.1
+    # -------- DETECTION LOGIC --------
+    audio_score = 0
+    text_score = 0
 
-        # Transcript perfection
-        lower_transcript = transcript.lower()
-        if len(lower_transcript.split()) > 15 and all(w not in lower_transcript for w in ["uh","um","hmm"]):
-            audio_score += 0.2
-        else:
-            text_score += 0.1
+    if pitch_variance < 50:
+        audio_score += 0.3
+    else:
+        text_score += 0.1
 
-        confidence = min(audio_score + text_score, 1.0)
+    if zcr_mean < 0.05:
+        audio_score += 0.3
+    else:
+        text_score += 0.1
 
-        # -------- Ambiguity Detection --------
-        score_gap = abs(audio_score - text_score)
+    if spectral_flatness < 0.01:
+        audio_score += 0.3
+    else:
+        text_score += 0.1
 
-        if score_gap < 0.15:
-            confidence *= 0.7
-            ambiguity_flag = True
-        elif score_gap < 0.30:
-            confidence *= 0.85
-            ambiguity_flag = True
-        else:
-            ambiguity_flag = False
+    lower_transcript = transcript.lower()
+    if len(lower_transcript.split()) > 15 and all(w not in lower_transcript for w in ["uh", "um", "hmm"]):
+        audio_score += 0.2
+    else:
+        text_score += 0.1
 
-        
-        if audio_score > text_score:
-            classification = "AI_GENERATED"
-            explanation = "Low pitch variance, smooth waveform structure, and reduced natural noise suggest synthetic voice"
-        else:
-            classification = "HUMAN"
-            explanation = "Irregular waveform dynamics and natural noise patterns indicate human speech"
+    confidence = min(audio_score + text_score, 1.0)
+    score_gap = abs(audio_score - text_score)
 
-        # Add ambiguity note
-        if ambiguity_flag:
-            explanation += ". However, signal characteristics show overlap between human and AI traits, reducing confidence."
+    if score_gap < 0.15:
+        confidence *= 0.7
+        ambiguity_flag = True
+    elif score_gap < 0.30:
+        confidence *= 0.85
+        ambiguity_flag = True
+    else:
+        ambiguity_flag = False
 
-            return {
-                "status": "success",
-                "language": request.language,
-                "classification": classification,
-                "confidenceScore": confidence,
-                "explanation": explanation
-                }
+    if audio_score > text_score:
+        classification = "AI_GENERATED"
+        explanation = "Low pitch variance and smooth spectral features suggest synthetic voice"
+    else:
+        classification = "HUMAN"
+        explanation = "Natural waveform irregularities indicate human speech"
 
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    if ambiguity_flag:
+        explanation += ". Mixed signal traits reduce confidence."
+
+    return {
+        "status": "success",
+        "language": body.language,
+        "classification": classification,
+        "confidenceScore": round(confidence, 2),
+        "explanation": explanation
+    }

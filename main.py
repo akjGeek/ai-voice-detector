@@ -38,7 +38,7 @@ async def detect_voice(
 ):
 
    
-    print("VERSION 5 DEPLOYED")
+    print("VERSION 6 DEPLOYED")
     print("HEADERS:", dict(req.headers))
 
     # -------- API KEY --------
@@ -143,3 +143,4 @@ async def detect_voice(
         "confidenceScore": round(confidence, 2),
         "explanation": explanation
     }
+

@@ -24,7 +24,7 @@ SUPPORTED_LANGUAGES = ["Tamil", "English", "Hindi", "Malayalam", "Telugu"]
 @app.post("/api/voice-detection")
 async def detect_voice(request: Request, body: VoiceRequest):
 
-    print("VERSION 7 DEPLOYED")
+    print("VERSION 8 DEPLOYED")
 
     # ✅ DEFINE API KEY PROPERLY
     api_key = request.headers.get("x-api-key") or request.headers.get("x_api_key")
@@ -100,3 +100,4 @@ async def detect_voice(request: Request, body: VoiceRequest):
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
+

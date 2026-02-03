@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header
 from pydantic import BaseModel
 import base64
 import whisper
@@ -31,10 +31,14 @@ SUPPORTED_LANGUAGES = ["Tamil", "English", "Hindi", "Malayalam", "Telugu"]
 
 # ------------------ ENDPOINT ------------------
 @app.post("/api/voice-detection")
-async def detect_voice(req: Request, body: VoiceRequest):
+async def detect_voice(
+    req: Request,
+    body: VoiceRequest,
+    x_api_key: str = Header(None)   #  THIS LINE FIXES SWAGGER
+):
 
-    api_key = req.headers.get("x-api-key") or req.headers.get("x_api_key")
-    print("VERSION 4 DEPLOYED")
+   
+    print("VERSION 5 DEPLOYED")
     print("HEADERS:", dict(req.headers))
 
     # -------- API KEY --------

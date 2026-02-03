@@ -10,7 +10,15 @@ import os
 app = FastAPI()
 
 # Load Whisper once 
-model = whisper.load_model("base")
+model = None
+
+def get_model():
+    global model
+    if model is None:
+        model = whisper.load_model("tiny", device="cpu")
+    return model
+
+#model = whisper.load_model("base")
 #API_SECRET = "my_secret_key"
 
 API_SECRET = os.getenv("API_SECRET")
@@ -44,11 +52,15 @@ async def detect_voice(request: VoiceRequest, x_api_key: str = Header(None)):
             temp_path = f.name
 
         # Transcription
-        result = model.transcribe(temp_path)
+        #result = model.transcribe(temp_path)
+        result = get_model().transcribe(temp_path)
+
         transcript = result["text"]
 
         # Audio Features
-        y, sr = librosa.load(temp_path)
+        #y, sr = librosa.load(temp_path)
+        y, sr = librosa.load(temp_path, sr=16000)
+
         mfcc_mean = float(np.mean(librosa.feature.mfcc(y=y, sr=sr)))
         pitch_mean = float(np.mean(librosa.yin(y, fmin=50, fmax=300)))
 

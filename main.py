@@ -12,6 +12,7 @@ app = FastAPI()
 
 # Load Whisper once 
 model = None
+print("VERSION 2 DEPLOYED")
 
 def get_model():
     global model
@@ -138,3 +139,4 @@ async def detect_voice(request: Request, body: VoiceRequest):
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
+

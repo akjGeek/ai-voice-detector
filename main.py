@@ -5,7 +5,7 @@ import base64, whisper, librosa, numpy as np, tempfile, os
 app = FastAPI()
 
 model = None
-
+print("VERSION 8 DEPLOYED")
 def get_model():
     global model
     if model is None:
@@ -100,4 +100,5 @@ async def detect_voice(request: Request, body: VoiceRequest):
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 

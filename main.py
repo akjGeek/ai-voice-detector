@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Header, HTTPException
+from fastapi import Request
 from pydantic import BaseModel
 import base64
 import whisper
@@ -32,9 +33,11 @@ class VoiceRequest(BaseModel):
 SUPPORTED_LANGUAGES = ["Tamil", "English", "Hindi", "Malayalam", "Telugu"]
 
 @app.post("/api/voice-detection")
-async def detect_voice(request: VoiceRequest, x_api_key: str = Header(None)):
+async def detect_voice(request: Request, body: VoiceRequest):
 
-    if x_api_key != API_SECRET:
+    api_key = request.headers.get("x-api-key")
+
+    if api_key != API_SECRET:
         return {"status": "error", "message": "Invalid API key"}
 
     if request.language not in SUPPORTED_LANGUAGES:

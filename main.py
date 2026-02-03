@@ -12,7 +12,6 @@ app = FastAPI()
 
 # Load Whisper once 
 model = None
-print("VERSION 2 DEPLOYED")
 
 def get_model():
     global model
@@ -36,7 +35,10 @@ SUPPORTED_LANGUAGES = ["Tamil", "English", "Hindi", "Malayalam", "Telugu"]
 @app.post("/api/voice-detection")
 async def detect_voice(request: Request, body: VoiceRequest):
 
-    api_key = request.headers.get("x-api-key")
+    #api_key = request.headers.get("x-api-key")
+    api_key = request.headers.get("x-api-key") or request.headers.get("x_api_key")
+    print("VERSION 3 DEPLOYED")
+    print("HEADERS RECEIVED:", dict(request.headers))
 
     if api_key != API_SECRET:
         return {"status": "error", "message": "Invalid API key"}
@@ -139,4 +141,3 @@ async def detect_voice(request: Request, body: VoiceRequest):
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
-

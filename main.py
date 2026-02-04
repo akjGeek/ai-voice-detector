@@ -6,21 +6,28 @@ import librosa
 import numpy as np
 import tempfile
 import os
-import binascii
+import time
 
 app = FastAPI()
-print("VERSION 13 DEPLOYED")
-# Load Whisper lazily to save memory
+
+# ---------------- MODEL LOADING ----------------
 model = None
+
 def get_model():
     global model
     if model is None:
         model = whisper.load_model("tiny", device="cpu")
     return model
 
+@app.on_event("startup")
+def preload_model():
+    get_model()
+    print("Model preloaded successfully")
+
+# ---------------- SECURITY ----------------
 API_SECRET = os.getenv("API_SECRET")
 
-# Request schema
+# ---------------- REQUEST MODEL ----------------
 class VoiceRequest(BaseModel):
     language: str
     audioFormat: str
@@ -35,60 +42,79 @@ LANGUAGE_MAP = {
     "Telugu": "te"
 }
 
+# ---------------- API ENDPOINT ----------------
 @app.post("/api/voice-detection")
-async def detect_voice(body: VoiceRequest, x_api_key: str = Header(None)):
+async def detect_voice(
+    body: VoiceRequest,
+    x_api_key: str = Header(None)
+):
+    print("FINAL VERSION DEPLOYED")
 
-    # 🔐 Server config validation
+    # ---- Server configuration check ----
     if not API_SECRET:
         return {"status": "error", "message": "Server misconfiguration: API secret missing"}
 
-    # 🔑 API key validation
+    # ---- API Key validation ----
     if x_api_key != API_SECRET:
         return {"status": "error", "message": "Invalid API key"}
 
-    # 🌍 Language validation
+    # ---- Language validation ----
     if body.language not in SUPPORTED_LANGUAGES:
         return {"status": "error", "message": "Unsupported language"}
 
-    # 🎵 Audio format validation
+    # ---- Format validation ----
     if body.audioFormat.lower() != "mp3":
         return {"status": "error", "message": "Invalid audio format"}
 
-    try:
-        # 📦 Safe Base64 decoding
-        try:
-            audio_bytes = base64.b64decode(body.audioBase64, validate=True)
-        except binascii.Error:
-            return {"status": "error", "message": "Invalid Base64 audio"}
+    # ---- Short input check ----
+    if len(body.audioBase64) < 100:
+        return {"status": "error", "message": "Audio too short or invalid"}
 
-        # 💾 Save temp file
+    # ---- Decode Base64 safely ----
+    try:
+        audio_bytes = base64.b64decode(body.audioBase64 + "==")
+    except Exception:
+        return {"status": "error", "message": "Invalid base64 audio"}
+
+    # ---- Size limit (protect RAM) ----
+    if len(audio_bytes) > 5 * 1024 * 1024:
+        return {"status": "error", "message": "Audio file too large"}
+
+    temp_path = None
+    start_time = time.time()
+
+    try:
+        # ---- Save temp file ----
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
             f.write(audio_bytes)
             temp_path = f.name
 
-        # 📝 Transcription (lightweight)
+        # ---- Transcription ----
         whisper_model = get_model()
         result = whisper_model.transcribe(temp_path, language=LANGUAGE_MAP[body.language])
         transcript = result["text"].strip()
 
-        # 🎧 Load audio safely
+        # ---- Audio Feature Extraction ----
         y, sr = librosa.load(temp_path, sr=16000, mono=False)
         if len(y.shape) > 1:
             y = librosa.to_mono(y)
 
         if len(y) == 0:
-            raise ValueError("Empty audio")
+            return {"status": "error", "message": "Empty audio file"}
 
-        # 🎼 Feature extraction
-        yin_vals = librosa.yin(y, fmin=50, fmax=300, sr=sr)
-        pitch_var = float(np.var(yin_vals))
+        yin_pitches = librosa.yin(y, fmin=50, fmax=300, sr=sr)
+        pitch_var = float(np.var(yin_pitches))
+
         zcr = float(np.mean(librosa.feature.zero_crossing_rate(y)))
+
         stft = np.abs(librosa.stft(y))
         flatness = float(np.mean(librosa.feature.spectral_flatness(S=stft)))
 
-        os.remove(temp_path)
+        # ---- Timeout protection ----
+        if time.time() - start_time > 20:
+            return {"status": "error", "message": "Processing timeout"}
 
-        # 🧠 AI vs Human Scoring
+        # ---- Scoring ----
         audio_score = 0.0
         text_score = 0.0
 
@@ -107,9 +133,12 @@ async def detect_voice(body: VoiceRequest, x_api_key: str = Header(None)):
         else:
             text_score += 0.1
 
-        # Minimal transcript influence
-        if len(transcript.split()) > 10:
-            text_score += 0.1
+        word_count = len(transcript.split())
+        fillers = ["uh", "um", "hmm", "er", "ah"]
+        if word_count > 15 and not any(w in transcript.lower() for w in fillers):
+            text_score += 0.2
+        else:
+            audio_score += 0.1
 
         confidence = min(audio_score + text_score, 1.0)
         score_gap = abs(audio_score - text_score)
@@ -119,15 +148,13 @@ async def detect_voice(body: VoiceRequest, x_api_key: str = Header(None)):
         elif score_gap < 0.3:
             confidence *= 0.85
 
-        # 🎯 Final Decision
-        if audio_score > text_score:
+        if audio_score > text_score + 0.05:
             classification = "AI_GENERATED"
-            explanation = f"Low pitch variance ({pitch_var:.1f}) and flat spectral profile suggest synthetic speech"
+            explanation = "Synthetic speech characteristics detected"
         else:
             classification = "HUMAN"
-            explanation = f"High pitch variation and natural spectral dynamics indicate human speech"
+            explanation = "Natural speech characteristics detected"
 
-        # ✅ EXACT FORMAT REQUIRED BY CHALLENGE
         return {
             "status": "success",
             "language": body.language,
@@ -136,5 +163,15 @@ async def detect_voice(body: VoiceRequest, x_api_key: str = Header(None)):
             "explanation": explanation
         }
 
+
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        print("ERROR:", str(e))
+        return {
+            "status": "error",
+            "message": "Processing failed",
+            "details": str(e)[:100]
+        }
+
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)

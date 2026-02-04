@@ -1,9 +1,7 @@
 fastapi
 uvicorn
+openai-whisper
 librosa
 numpy
-python-dotenv
-openai-whisper
-torch
-ffmpeg-python
-openai
+soundfile
+torch --index-url https://download.pytorch.org/whl/cpu

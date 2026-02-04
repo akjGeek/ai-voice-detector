@@ -9,6 +9,7 @@ import os
 
 app = FastAPI()
 
+# Lazy Whisper load (prevents memory spike at boot)
 model = None
 
 def get_model():
@@ -26,7 +27,7 @@ class VoiceRequest(BaseModel):
 
 SUPPORTED_LANGUAGES = ["Tamil", "English", "Hindi", "Malayalam", "Telugu"]
 LANGUAGE_MAP = {
-    "Tamil": "ta", "English": "en", "Hindi": "hi", 
+    "Tamil": "ta", "English": "en", "Hindi": "hi",
     "Malayalam": "ml", "Telugu": "te"
 }
 
@@ -35,7 +36,7 @@ async def detect_voice(
     body: VoiceRequest,
     x_api_key: str = Header(None)
 ):
-    print("VERSION 11 - FIXED DEPLOYED")
+    print("VERSION 12 DEPLOYED")
 
     # 🔐 Server config check
     if not API_SECRET:
@@ -54,7 +55,7 @@ async def detect_voice(
         return {"status": "error", "message": "Invalid audio format"}
 
     try:
-        # Decode audio
+        # Decode Base64 audio
         audio_bytes = base64.b64decode(body.audioBase64)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
@@ -66,54 +67,69 @@ async def detect_voice(
         result = whisper_model.transcribe(temp_path, language=LANGUAGE_MAP[body.language])
         transcript = result["text"].strip()
 
-        # Feature extraction - FIXED: mono, proper inputs
+        # Audio loading
         y, sr = librosa.load(temp_path, sr=16000, mono=False)
-        if len(y.shape) > 1:  # Stereo -> mono
+
+        # Stereo → mono
+        if len(y.shape) > 1:
             y = librosa.to_mono(y)
-        
+
         if len(y) == 0:
             raise ValueError("Empty audio file")
 
-        # Pitch variance - FIXED: 1D input
+        # ===== FEATURE EXTRACTION =====
+
+        # Pitch variance
         yin_pitches = librosa.yin(y, fmin=50, fmax=300, sr=sr)
         pitch_var = float(np.var(yin_pitches))
 
-        # Zero crossing rate
+        # Zero Crossing Rate
         zcr = float(np.mean(librosa.feature.zero_crossing_rate(y)))
 
-        # Spectral flatness - FIXED: proper STFT input
+        # Spectral flatness
         stft = np.abs(librosa.stft(y))
         flatness = float(np.mean(librosa.feature.spectral_flatness(S=stft)))
 
+        # 🔥 NEW FEATURE — Energy variance (major improvement)
+        energy = librosa.feature.rms(y=y)[0]
+        energy_var = float(np.var(energy))
+
         os.remove(temp_path)
 
-        # 🧠 Improved Scoring (logic preserved but thresholds tuned)
-        audio_score = 0.0  # AI indicators
-        text_score = 0.0   # Human indicators
+        # ===== SCORING SYSTEM =====
 
-        # Lower pitch variance -> more AI-like (synthetic flatter)
-        if pitch_var < 100:  # Tuned threshold
+        audio_score = 0.0
+        text_score = 0.0
+
+        # Pitch variance
+        if pitch_var < 100:
             audio_score += 0.3
         else:
             text_score += 0.1
 
-        # Lower ZCR -> AI (less natural crossings)
+        # ZCR
         if zcr < 0.08:
             audio_score += 0.3
         else:
             text_score += 0.1
 
-        # Higher flatness -> AI (less harmonic)
+        # Spectral flatness
         if flatness > 0.15:
             audio_score += 0.3
         else:
             text_score += 0.1
 
-        # Better transcript -> human
+        # 🔥 Energy variance scoring
+        if energy_var < 0.001:
+            audio_score += 0.2
+        else:
+            text_score += 0.1
+
+        # Transcript behavior
         word_count = len(transcript.split())
         fillers = ["uh", "um", "hmm", "er", "ah"]
         has_few_fillers = not any(w in transcript.lower() for w in fillers)
-        
+
         if word_count > 15 and has_few_fillers:
             text_score += 0.2
         else:
@@ -122,28 +138,30 @@ async def detect_voice(
         confidence = min(audio_score + text_score, 1.0)
         score_gap = abs(audio_score - text_score)
 
-        # Lower confidence if scores conflicted
+        # Reduce confidence if mixed signals
         if score_gap < 0.15:
             confidence *= 0.7
         elif score_gap < 0.3:
             confidence *= 0.85
 
-        if audio_score > text_score + 0.05:  # Small margin for decision
+        # Final classification
+        if audio_score > text_score + 0.05:
             classification = "AI_GENERATED"
-            explanation = "Synthetic speech characteristics detected (low variance, flat spectrum)"
+            explanation = "Synthetic speech characteristics detected (low variance, flat spectrum, stable energy)"
         else:
             classification = "HUMAN"
-            explanation = "Natural speech characteristics detected (high variance, natural ZCR)"
+            explanation = "Natural speech characteristics detected (high variance, natural fluctuations)"
 
         return {
             "status": "success",
             "language": body.language,
-            "transcript": transcript[:200] + "..." if len(transcript) > 200 else transcript,  # Preview
+            "transcriptPreview": transcript[:200] + "..." if len(transcript) > 200 else transcript,
             "wordCount": word_count,
             "features": {
                 "pitchVar": round(pitch_var, 2),
                 "zcr": round(zcr, 3),
-                "flatness": round(flatness, 3)
+                "flatness": round(flatness, 3),
+                "energyVar": round(energy_var, 5)
             },
             "audioScore": round(audio_score, 2),
             "textScore": round(text_score, 2),
@@ -153,4 +171,8 @@ async def detect_voice(
         }
 
     except Exception as e:
-        return {"status": "error", "message": str(e), "details": type(e).__name__}
+        return {
+            "status": "error",
+            "message": str(e),
+            "details": type(e).__name__
+        }

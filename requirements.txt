@@ -1,8 +1,7 @@
 fastapi
-uvicorn[standard]
+uvicorn
 openai-whisper
-torch
 librosa
 numpy
-python-multipart
-ffmpeg-python
+soundfile
+torch
